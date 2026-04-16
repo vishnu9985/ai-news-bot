@@ -4,7 +4,7 @@ import os
 from transformers import pipeline
 
 # =========================
-# CONFIG
+# CONFIG (FROM GITHUB SECRETS)
 # =========================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -21,21 +21,11 @@ RSS_FEEDS = {
 }
 
 # =========================
-# HIGH ALERT KEYWORDS
-# =========================
-HIGH_ALERT_KEYWORDS = [
-    "crash", "war", "conflict", "tensions", "sanctions",
-    "inflation surge", "interest rate hike", "rate hike",
-    "RBI decision", "Fed decision", "recession",
-    "market fall", "sell-off", "fii selling", "volatility"
-]
-
-# =========================
-# FAST AI MODEL
+# FAST MODEL (COMPATIBLE)
 # =========================
 generator = pipeline(
-    "text2text-generation",
-    model="google/flan-t5-small"
+    "text-generation",
+    model="sshleifer/tiny-gpt2"   # FAST + WORKS
 )
 
 # =========================
@@ -43,50 +33,43 @@ generator = pipeline(
 # =========================
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {"chat_id": CHAT_ID, "text": message}
+    data = {
+        "chat_id": CHAT_ID,
+        "text": message
+    }
     requests.post(url, data=data)
 
 # =========================
-# HIGH ALERT FILTER
+# 🚨 SIMPLE HIGH ALERT FILTER (KEYWORDS)
 # =========================
 def is_high_alert(text):
+    keywords = [
+        "war", "crash", "inflation", "rbi", "fed",
+        "interest rate", "recession", "conflict",
+        "fii selling", "market fall", "global tension"
+    ]
+    
     text_lower = text.lower()
-    for keyword in HIGH_ALERT_KEYWORDS:
-        if keyword in text_lower:
-            return True
-    return False
+    return any(word in text_lower for word in keywords)
 
 # =========================
-# AI EXPLANATION
+# SIMPLE EXPLANATION (FAST)
 # =========================
 def process_news(text):
-    prompt = f"""
-Explain this financial news simply.
-
-{text}
-
-Include:
-- What happened
-- Why it matters
-- Market impact
-"""
-
-    try:
-        output = generator(prompt, max_length=120)[0]['generated_text']
-        return output.strip()
-    except:
-        return text
+    return f"{text}\n👉 This news may impact markets. Watch closely."
 
 # =========================
 # GENERATE REPORT
 # =========================
 def generate_report():
-    final_message = "⚠️ HIGH ALERT MARKET NEWS\n\n"
-    found_alert = False
+    final_message = "🚨 HIGH ALERT AI NEWS 🚨\n\n"
+    found = False
 
     for category, url in RSS_FEEDS.items():
         feed = feedparser.parse(url)
         articles = feed.entries[:2]
+
+        category_added = False
 
         for article in articles:
             title = article.title
@@ -94,24 +77,25 @@ def generate_report():
             if is_high_alert(title):
                 explanation = process_news(title)
 
-                final_message += f"{category}\n"
-                final_message += f"🚨 {explanation}\n\n"
-                final_message += "----------------------\n\n"
+                if not category_added:
+                    final_message += f"{category}\n"
+                    category_added = True
 
-                found_alert = True
+                final_message += f"📰 {explanation}\n\n"
+                found = True
 
-    if not found_alert:
-        return "✅ No high-impact financial news right now."
+    if not found:
+        final_message = "✅ No high-impact financial news right now."
 
     return final_message
 
 # =========================
-# RUN ONCE
+# RUN ONCE (GITHUB ACTIONS)
 # =========================
 if __name__ == "__main__":
     try:
         report = generate_report()
         send_telegram(report)
-        print("✅ High alert news sent")
+        print("✅ News sent successfully")
     except Exception as e:
         print("❌ Error:", e)
