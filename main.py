@@ -1,101 +1,118 @@
-import requests
+ import streamlit as st
 import feedparser
-import os
-from transformers import pipeline
+from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
+from telegram import Bot
+from telegram.constants import ParseMode
 
-# =========================
-# CONFIG (FROM GITHUB SECRETS)
-# =========================
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHAT_ID = os.getenv("CHAT_ID")
+# 🔐 Telegram credentials from secrets.toml
+bot_token = st.secrets["bot_token"]
+chat_id   = st.secrets["chat_id"]
+bot = Bot(token=bot_token)
 
-# =========================
-# NEWS SOURCES
-# =========================
-RSS_FEEDS = {
-    "📊 Indian Market": "https://news.google.com/rss/search?q=indian+stock+market+nifty+sensex",
-    "🌍 Geopolitics": "https://news.google.com/rss/search?q=geopolitical+tensions+war+china+usa+india",
-    "💰 Economy": "https://news.google.com/rss/search?q=inflation+RBI+GDP+interest+rates+India",
-    "🏭 Industry": "https://news.google.com/rss/search?q=IT+banking+energy+sector+India",
-    "🌐 Global Markets": "https://news.google.com/rss/search?q=US+market+Fed+global+stocks"
-}
+# 🌐 RSS Feeds
+feeds = [
+    "https://www.moneycontrol.com/rss/news.xml",
+    "https://economictimes.indiatimes.com/rssfeedsdefault.cms",
+    "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=10001147",
+    "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=158391",
+    "https://feeds.reuters.com/reuters/businessNews",
+    "https://feeds.reuters.com/reuters/marketsNews",
+    "https://www.ft.com/rss/home",
+    "https://www.investing.com/rss/news_25.rss",
+    "https://finance.yahoo.com/news/rssindex",
+    "https://www.marketwatch.com/rss/topstories",
+    "https://www.business-standard.com/rss/home_page_top_stories.rss",
+    "https://www.livemint.com/rss/news"
+]
 
-# =========================
-# FAST MODEL (COMPATIBLE)
-# =========================
-generator = pipeline(
-    "text-generation",
-    model="sshleifer/tiny-gpt2"   # FAST + WORKS
-)
+# 📊 Sentiment tagging
+def detect_sentiment(text):
+    text = text.lower()
+    if any(w in text for w in ["surge", "gain", "rise", "up", "record high"]): return "📈 Bullish"
+    if any(w in text for w in ["fall", "drop", "decline", "down", "plunge"]): return "📉 Bearish"
+    return "⚖️ Neutral"
 
-# =========================
-# TELEGRAM FUNCTION
-# =========================
-def send_telegram(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    data = {
-        "chat_id": CHAT_ID,
-        "text": message
-    }
-    requests.post(url, data=data)
+# 🏷 Sector tagging
+def tag_sector(text):
+    text = text.lower()
+    if any(w in text for w in ["bank", "loan", "insurance", "finance", "nifty"]): return "💰 Finance"
+    if any(w in text for w in ["auto", "vehicle", "ev", "car", "bike"]): return "🚗 Auto"
+    if any(w in text for w in ["power", "energy", "solar", "electricity"]): return "🔋 Energy"
+    if any(w in text for w in ["gold", "silver", "commodity", "metal"]): return "🪙 Commodities"
+    if any(w in text for w in ["tech", "software", "ai", "it", "startup"]): return "💻 Technology"
+    if any(w in text for w in ["real estate", "property", "housing"]): return "🏠 Real Estate"
+    return "🌐 General"
 
-# =========================
-# 🚨 SIMPLE HIGH ALERT FILTER (KEYWORDS)
-# =========================
-def is_high_alert(text):
-    keywords = [
-        "war", "crash", "inflation", "rbi", "fed",
-        "interest rate", "recession", "conflict",
-        "fii selling", "market fall", "global tension"
-    ]
-    
-    text_lower = text.lower()
-    return any(word in text_lower for word in keywords)
+# 🧠 Summarizer
+def summarize_to_points(text):
+    return [s.strip() for s in text.split(". ") if len(s.strip()) > 30][:5]
 
-# =========================
-# SIMPLE EXPLANATION (FAST)
-# =========================
-def process_news(text):
-    return f"{text}\n👉 This news may impact markets. Watch closely."
-
-# =========================
-# GENERATE REPORT
-# =========================
-def generate_report():
-    final_message = "🚨 HIGH ALERT AI NEWS 🚨\n\n"
-    found = False
-
-    for category, url in RSS_FEEDS.items():
-        feed = feedparser.parse(url)
-        articles = feed.entries[:2]
-
-        category_added = False
-
-        for article in articles:
-            title = article.title
-
-            if is_high_alert(title):
-                explanation = process_news(title)
-
-                if not category_added:
-                    final_message += f"{category}\n"
-                    category_added = True
-
-                final_message += f"📰 {explanation}\n\n"
-                found = True
-
-    if not found:
-        final_message = "✅ No high-impact financial news right now."
-
-    return final_message
-
-# =========================
-# RUN ONCE (GITHUB ACTIONS)
-# =========================
-if __name__ == "__main__":
+# 📲 Telegram push
+def send_text_to_telegram(headlines):
+    message = "📈 Spot Trading – Daily Market Pulse\n\n"
+    for h in headlines:
+        message += f"*📰 {h['title']}*\n"
+        for p in h['points']:
+            message += f"• {p}\n"
+        message += f"\n{h['sentiment']} | {h['sector']}\n"
+        message += f"🔗 Source: {h['source']}\n\n"
     try:
-        report = generate_report()
-        send_telegram(report)
-        print("✅ News sent successfully")
+        bot.send_message(chat_id=chat_id, text=message, parse_mode=ParseMode.MARKDOWN)
     except Exception as e:
-        print("❌ Error:", e)
+        st.error(f"Telegram error: {e}")
+
+# 🔁 News Fetcher
+def fetch_and_display_news():
+    headlines = []
+    for url in feeds:
+        feed = feedparser.parse(url)
+        for entry in feed.entries[:3]:
+            headline = entry.title
+            link = entry.link
+            source = link.split("/")[2]
+            full_text = entry.get("summary", entry.get("description", ""))
+
+            if headline not in st.session_state.seen and full_text:
+                st.session_state.seen.add(headline)
+                points = summarize_to_points(full_text)
+                sentiment = detect_sentiment(full_text)
+                sector = tag_sector(full_text)
+
+                st.markdown(f"### 📰 {headline}")
+                for p in points:
+                    st.write(f"• {p}")
+                st.write(f"{sentiment} | {sector}")
+                st.markdown(f"🔗 Source: `{source}`")
+                st.markdown(f"[Read more]({link})")
+                st.divider()
+
+                headlines.append({
+                    "title": headline,
+                    "points": points,
+                    "sentiment": sentiment,
+                    "source": source,
+                    "sector": sector
+                })
+
+    if headlines:
+        send_text_to_telegram(headlines)
+        st.success("✅ News summary sent to Telegram!")
+
+# 🧩 Streamlit UI
+st.set_page_config(page_title="Spot Trading – Auto News Pulse", layout="wide")
+st.title("📈 Spot Trading – Daily Market Pulse")
+st.write(f"🗓️ {datetime.now().strftime('%d %b %Y, %I:%M %p')}")
+
+# 🔁 Auto-refresh setup
+refresh_minutes = st.slider("⏱️ Auto-refresh every X seconds", 10, 600, 10)
+st_autorefresh(10)
+
+# 🧠 Session state
+if "seen" not in st.session_state:
+    st.session_state.seen = set()
+
+# 🚀 Fetch and display
+fetch_and_display_news()
+
+
